@@ -6,6 +6,49 @@
 (function(){
   const LOG = (...args) => console.debug('[nearby-only]', ...args);
   const NEARBY_TAB_SELECTOR = '#tabbar > nav > button:nth-child(2)';
+  let __nearby_only_should_stop = false;
+
+  function emulateSwipe(container, direction = 'down'){
+    try{
+      // container may be element or document
+      const target = (container && container !== window) ? container : document.scrollingElement || document.documentElement;
+      const rect = (target.getBoundingClientRect && target.getBoundingClientRect()) || {left:0, top:0, width: window.innerWidth, height: window.innerHeight};
+      const startX = rect.left + (rect.width/2);
+      const startY = rect.top + (rect.height * 0.8);
+      const endY = rect.top + (rect.height * 0.2);
+      const steps = 8;
+      // dispatch pointer events if supported
+      const supportsPointer = typeof window.PointerEvent === 'function';
+      if(supportsPointer){
+        const id = Date.now() % 65536;
+        const down = new PointerEvent('pointerdown', {bubbles:true,cancelable:true,pointerId:id,clientX:startX,clientY:startY,isPrimary:true});
+        target.dispatchEvent(down);
+        for(let i=1;i<=steps;i++){
+          const t = i/steps;
+          const y = startY + (endY - startY) * t;
+          const move = new PointerEvent('pointermove', {bubbles:true,cancelable:true,pointerId:id,clientX:startX,clientY:Math.floor(y),isPrimary:true});
+          target.dispatchEvent(move);
+        }
+        const up = new PointerEvent('pointerup', {bubbles:true,cancelable:true,pointerId:id,clientX:startX,clientY:endY,isPrimary:true});
+        target.dispatchEvent(up);
+      } else {
+        // fallback to mouse events
+        const mdown = new MouseEvent('mousedown', {bubbles:true,cancelable:true,clientX:startX,clientY:startY});
+        target.dispatchEvent(mdown);
+        for(let i=1;i<=steps;i++){
+          const t = i/steps;
+          const y = startY + (endY - startY) * t;
+          const move = new MouseEvent('mousemove', {bubbles:true,cancelable:true,clientX:startX,clientY:Math.floor(y)});
+          target.dispatchEvent(move);
+        }
+        const mup = new MouseEvent('mouseup', {bubbles:true,cancelable:true,clientX:startX,clientY:endY});
+        target.dispatchEvent(mup);
+      }
+      // ensure scroll has some effect as fallback
+      try{ target.scrollBy && target.scrollBy(0, endY - startY); }catch(e){}
+      return true;
+    }catch(e){ LOG('emulateSwipe failed', e); return false; }
+  }
 
   function findNearbyUL(){
     return document.querySelector('ul.csms-user-list')
@@ -70,7 +113,7 @@
   }
 
   async function autoScrollAndCollect(opts = {}){
-    const cfg = Object.assign({maxSteps:120, stepDelay:650, stopIfNoNew:6}, opts||{});
+    const cfg = Object.assign({maxSteps:120, stepDelay:650, stopIfNoNew:6, emulatePointer: false}, opts||{});
     const list = findNearbyUL();
     if(!list){ LOG('nearby list not found, aborting'); return []; }
     const container = getScrollableAncestor(list);
@@ -79,6 +122,7 @@
     let lastCount = 0, noNew = 0;
 
     for(let step=0; step<cfg.maxSteps; step++){
+      if(__nearby_only_should_stop){ LOG('stop requested, aborting'); break; }
       const found = extractVisibleProfiles();
       LOG('step', step, 'found', found.length, 'collected', collected.length);
       for(const p of found){
@@ -90,6 +134,17 @@
       if(found.length) sendBatch(found);
       if(collected.length > lastCount){ lastCount = collected.length; noNew = 0; }
       else noNew++;
+
+      // if we see no new items for a few steps, try pointer emulation swipe and continue
+      if(cfg.emulatePointer && noNew >= Math.max(2, Math.floor(cfg.stopIfNoNew/2))){
+        LOG('no new items, trying pointer emulation swipe');
+        emulateSwipe(container, 'down');
+        // allow some time to load
+        await new Promise(r => setTimeout(r, Math.max(300, cfg.stepDelay/2)));
+        noNew = 0; // reset and continue
+        continue;
+      }
+
       if(noNew >= cfg.stopIfNoNew) break;
 
       // try to scroll
@@ -124,9 +179,16 @@
   try{
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       try{
-        if(msg && msg.type === 'start_nearby_only'){
+        if(!msg) return;
+        if(msg.type === 'start_nearby_only'){
+          __nearby_only_should_stop = false;
           autoScrollAndCollect(msg.cfg || {});
           sendResponse({started:true});
+          return true;
+        }
+        if(msg.type === 'stop_nearby_only'){
+          __nearby_only_should_stop = true;
+          sendResponse({stopped:true});
           return true;
         }
       }catch(e){ LOG('onMessage error', e); }
