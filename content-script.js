@@ -240,9 +240,181 @@
           sendResponse({started: true});
           return true;
         }
+        if(msg && msg.type === 'start_nearby_click_and_scrape'){
+          // start click-through scraping routine
+          startClickAndScrape(msg.cfg || {});
+          sendResponse({started: true});
+          return true;
+        }
       }catch(e){ console.warn('onMessage start_nearby_scrape error', e); }
     });
   }catch(e){ /* chrome.runtime may not be available in some contexts */ }
+
+  // --- Click-through scrape: click each profile's avatar/image, scrape opened profile, then return ---
+  let clickScrapeRunning = false;
+
+  function createMouseIndicator(){
+    let el = document.getElementById('__badoo_mouse_indicator');
+    if(el) return el;
+    el = document.createElement('div');
+    el.id = '__badoo_mouse_indicator';
+    el.style.position = 'fixed';
+    el.style.zIndex = 9999999;
+    el.style.width = '18px';
+    el.style.height = '18px';
+    el.style.border = '3px solid rgba(0,120,210,0.9)';
+    el.style.borderRadius = '50%';
+    el.style.background = 'rgba(0,120,210,0.15)';
+    el.style.pointerEvents = 'none';
+    el.style.transition = 'transform 0.25s linear, left 0.25s linear, top 0.25s linear';
+    el.style.left = '0px'; el.style.top = '0px';
+    document.documentElement.appendChild(el);
+    return el;
+  }
+
+  function moveMouseIndicatorTo(x,y){
+    const el = createMouseIndicator();
+    // center the indicator on the coordinates
+    el.style.left = (x - 9) + 'px';
+    el.style.top = (y - 9) + 'px';
+  }
+
+  function synthesizeMouseEvent(target, type, clientX, clientY){
+    const ev = new MouseEvent(type, {
+      view: window,
+      bubbles: true,
+      cancelable: true,
+      clientX: clientX,
+      clientY: clientY,
+      button: 0
+    });
+    try{ target.dispatchEvent(ev); }catch(e){}
+  }
+
+  async function moveAndClickElement(el){
+    if(!el) return false;
+    const rect = el.getBoundingClientRect();
+    const cx = Math.floor(rect.left + rect.width/2);
+    const cy = Math.floor(rect.top + rect.height/2);
+    // bring element into view
+    try{ el.scrollIntoView({behavior: 'auto', block: 'center', inline: 'center'}); }catch(e){}
+    // move indicator
+    moveMouseIndicatorTo(cx, cy);
+    // small pause for visual
+    await new Promise(r => setTimeout(r, 220));
+    // fire pointer/mouse events
+    try{
+      el.focus && el.focus();
+      synthesizeMouseEvent(el, 'mousemove', cx, cy);
+      synthesizeMouseEvent(el, 'mouseover', cx, cy);
+      synthesizeMouseEvent(el, 'mousedown', cx, cy);
+      synthesizeMouseEvent(el, 'click', cx, cy);
+      synthesizeMouseEvent(el, 'mouseup', cx, cy);
+    }catch(e){ console.warn('moveAndClickElement error', e); }
+    // allow UI to react
+    await new Promise(r => setTimeout(r, 350));
+    return true;
+  }
+
+  async function waitForProfileOpen(timeout = 2500){
+    // wait until a profile view/panel appears — try several selectors
+    const start = Date.now();
+    const selectors = [
+      '[data-qa="profile-page"]',
+      '.csms-profile-page',
+      '.profile-page',
+      '.profile',
+      '.profile-modal',
+      '.user-profile',
+      'div[class*="profile"]'
+    ];
+    while(Date.now() - start < timeout){
+      for(const s of selectors){
+        const el = document.querySelector(s);
+        if(el) return el;
+      }
+      await new Promise(r => setTimeout(r, 150));
+    }
+    return null;
+  }
+
+  function closeProfileView(){
+    // attempt several close strategies: click close button, press Esc, or history.back()
+    const closeCandidates = Array.from(document.querySelectorAll('button[aria-label*="close" i], button[title*="Close" i], button.csms-close, .csms-modal__close, .modal__close'));
+    for(const c of closeCandidates){ try{ c.click(); return true; }catch(e){} }
+    // press Escape
+    try{ document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', keyCode:27, which:27, bubbles:true})); }catch(e){}
+    // fallback: history.back() (guarded by try)
+    try{ history.back(); }catch(e){}
+    return false;
+  }
+
+  function scrapeOpenProfile(){
+    try{
+      // try to extract detailed information from the open profile view
+      const root = document.querySelector('[data-qa="profile-page"]') || document.querySelector('.csms-profile-page') || document.querySelector('.profile-page') || document.querySelector('.user-profile') || document.body;
+      // name/age
+      const nameEl = root.querySelector('.csms-profile-info__name-inner') || root.querySelector('[data-qa="profile-info__name"]') || root.querySelector('.profile-name') || root.querySelector('h1');
+      const ageEl = root.querySelector('[data-qa="profile-info__age"]') || root.querySelector('.profile-age');
+      const imgs = Array.from(root.querySelectorAll('img')).map(i=> i.src || i.getAttribute('src') || '').filter(Boolean);
+      const idFromBtn = (root.querySelector('button[data-qa-user-id]') && root.querySelector('button[data-qa-user-id]').getAttribute('data-qa-user-id')) || '';
+      const name = nameEl ? (nameEl.innerText || nameEl.textContent || '').trim() : '';
+      const age = ageEl ? (ageEl.innerText || ageEl.textContent || '').trim().replace(/^,\s*/,'') : '';
+      return {id: idFromBtn, name, age, images: imgs.slice(0,10)};
+    }catch(e){ console.warn('scrapeOpenProfile error', e); return null; }
+  }
+
+  async function clickAndScrapeNearby(opts = {}){
+    if(clickScrapeRunning) return;
+    clickScrapeRunning = true;
+    const cfg = Object.assign({perProfileDelay: 600, maxProfiles: 500, openTimeout: 2000}, opts || {});
+    try{
+      const list = findNearbyList();
+      if(!list){ console.debug('[content-script] clickAndScrapeNearby: nearby list not found'); clickScrapeRunning = false; return; }
+      // gather profile image buttons inside list
+      const items = Array.from(list.querySelectorAll('li.csms-user-list__item'));
+      console.debug('[content-script] clickAndScrapeNearby found items', items.length);
+      const results = [];
+      const indicator = createMouseIndicator();
+      let count = 0;
+      for(const it of items){
+        if(count >= cfg.maxProfiles) break;
+        // find target image element inside the item
+        const img = it.querySelector('img.csms-avatar__image') || it.querySelector('img') || it.querySelector('.csms-user-list-cell__media img');
+        const clickTarget = img || it.querySelector('button[data-qa-user-id]') || it.querySelector('button');
+        if(!clickTarget) continue;
+        console.debug('[content-script] clicking profile', {index: count+1});
+        await moveAndClickElement(clickTarget);
+        // wait for the profile to open
+        const opened = await waitForProfileOpen(cfg.openTimeout);
+        if(opened){
+          // small extra wait for dynamic content
+          await new Promise(r => setTimeout(r, 250));
+          const data = scrapeOpenProfile();
+          if(data) {
+            console.debug('[content-script] scraped profile', data.name || data.id, data.images && data.images.length);
+            results.push(data);
+            // send to background immediately
+            try{ chrome.runtime.sendMessage({type:'nearby_profiles', profiles: [ { id: data.id||'', name: data.name||'', age: data.age||'', image: (data.images && data.images[0])||'' } ]}); }catch(e){}
+          }
+          // close profile
+          closeProfileView();
+        } else {
+          console.debug('[content-script] profile did not open after click, skipping');
+        }
+        count++;
+        // small pause between profiles
+        await new Promise(r => setTimeout(r, cfg.perProfileDelay));
+      }
+      console.debug('[content-script] clickAndScrapeNearby finished', {scraped: results.length});
+    }catch(e){ console.warn('clickAndScrapeNearby failed', e); }
+    clickScrapeRunning = false;
+  }
+
+  function startClickAndScrape(cfg){
+    // expose a safe starter
+    try{ clickAndScrapeNearby(cfg || {}); }catch(e){ console.warn('startClickAndScrape', e); }
+  }
 
   // When the page URL is a people-nearby page, run once on load
   try{
