@@ -50,16 +50,23 @@
           for(const it of items){
             try{
               // name and age elements use csms-profile-info__name / __age
-              const nameEl = it.querySelector('.csms-profile-info__name, [data-qa*="profile-info__name"]');
-              const ageEl = it.querySelector('.csms-profile-info__age, [data-qa*="profile-info__age"]');
-              const imgEl = it.querySelector('.csms-user-list-cell__media img, img');
-              const name = nameEl ? nameEl.innerText.trim() : getNameFromElement(it);
-              const image = imgEl ? (imgEl.src || imgEl.getAttribute('src') || imgEl.getAttribute('data-src') || '') : getImageFromElement(it);
-              const key = (image||'') + '||' + (name||'');
+              // prefer explicit attributes/classes present in the nearby list
+              const btn = it.querySelector('button[data-qa-user-id]') || it.querySelector('button');
+              const userId = btn ? btn.getAttribute('data-qa-user-id') || '' : '';
+              const nameInner = it.querySelector('.csms-profile-info__name-inner') || it.querySelector('[data-qa="profile-info__name"]');
+              const ageEl = it.querySelector('[data-qa="profile-info__age"]') || it.querySelector('.csms-profile-info__age');
+              const imgEl = it.querySelector('.csms-avatar__image') || it.querySelector('.csms-user-list-cell__media img') || it.querySelector('img');
+              const name = nameInner ? nameInner.innerText.trim() : getNameFromElement(it);
+              let image = imgEl ? (imgEl.src || imgEl.getAttribute('src') || imgEl.getAttribute('data-src') || '') : getImageFromElement(it);
+              const age = ageEl ? (ageEl.innerText || ageEl.textContent || '').trim().replace(/^,\s*/,'') : '';
+              // normalize protocol-relative URLs
+              if(image && image.startsWith('//')) image = window.location.protocol + image;
+              // dedupe by stable user id when available, otherwise by image+name
+              const key = userId ? ('id:'+userId) : ((image||'') + '||' + (name||''));
               if(!name && !image) continue;
               if(seen.has(key)) continue;
               seen.add(key);
-              out.push({name: name||'', image: image||''});
+              out.push({id: userId||'', name: name||'', age: age||'', image: image||''});
             }catch(e){ /* ignore item errors */ }
           }
           // return prioritized results (images + name first)

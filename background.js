@@ -10,14 +10,20 @@ chrome.runtime.onInstalled.addListener(() => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   try{
     if(message && message.type === 'nearby_profiles' && Array.isArray(message.profiles)){
-      const incoming = message.profiles.map(p => ({ name: p.name||'', image: p.image||'', ts: Date.now() }));
+      const incoming = message.profiles.map(p => ({ id: p.id||'', name: p.name||'', age: p.age||'', image: p.image||'', ts: Date.now() }));
       chrome.storage.local.get({nearby_profiles: []}, data => {
         const existing = Array.isArray(data.nearby_profiles) ? data.nearby_profiles : [];
-        // merge and dedupe by image+name
+        // merge and dedupe by user id when available, otherwise by image+name
         const map = new Map();
         // keep existing first (older)
-        for(const e of existing){ map.set((e.image||'')+'||'+(e.name||''), e); }
-        for(const n of incoming){ map.set((n.image||'')+'||'+(n.name||''), n); }
+        for(const e of existing){
+          const key = e.id ? ('id:'+e.id) : ((e.image||'')+'||'+(e.name||''));
+          map.set(key, e);
+        }
+        for(const n of incoming){
+          const key = n.id ? ('id:'+n.id) : ((n.image||'')+'||'+(n.name||''));
+          map.set(key, n);
+        }
         const merged = Array.from(map.values()).sort((a,b)=> (b.ts||0) - (a.ts||0));
         // limit to last 2000 entries
         const limited = merged.slice(0, 2000);

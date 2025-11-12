@@ -864,8 +864,8 @@ document.addEventListener('DOMContentLoaded', ()=>{
       chrome.storage.local.get({nearby_profiles:[]}, data=>{
         const arr = Array.isArray(data.nearby_profiles) ? data.nearby_profiles : [];
         if(arr.length===0) return alert('No nearby profiles saved yet');
-        // merge into rows and render
-        for(const p of arr){ rows.push({name: p.name||'', age:'', bio:'', image: p.image||''}); }
+        // merge into rows and render (preserve id and age if present)
+        for(const p of arr){ rows.push({id: p.id||'', name: p.name||'', age: p.age||'', bio:'', image: p.image||''}); }
         renderRows();
         setStatus(`Loaded ${arr.length} nearby profiles`);
       });
