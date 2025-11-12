@@ -90,7 +90,7 @@
               console.warn('processing failed, adding original', e);
               files.push({name: filename, data: blob});
             }
-          } else { files.push({name: `${safeName}_noimage.txt`, data: new Blob([`Failed to fetch: ${url}`], {type:'text/plain'})}); }
+          } else { files.push({name: `${finalBase}_noimage.txt`, data: new Blob([`Failed to fetch: ${url}`], {type:'text/plain'})}); }
       }
       // add CSV summary
       const csv = toCSV(arr);
