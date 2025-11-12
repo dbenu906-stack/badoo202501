@@ -7,9 +7,26 @@
     try{
       const [tab] = await chrome.tabs.query({active:true,lastFocusedWindow:true});
       if(!tab) return setStatus('No active tab');
-      chrome.tabs.sendMessage(tab.id, msg, (resp)=>{
-        if(chrome.runtime.lastError) setStatus(chrome.runtime.lastError.message);
-        else setStatus('Sent: ' + (msg.type||''));
+      chrome.tabs.sendMessage(tab.id, msg, async (resp)=>{
+        if(chrome.runtime.lastError){
+          const err = chrome.runtime.lastError.message || '';
+          // common case: content script not injected on this tab/frame
+          setStatus('No receiver: attempting to inject content script...');
+          try{
+            await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content-script.js'] });
+            // give the script a short moment to initialize
+            setTimeout(()=>{
+              chrome.tabs.sendMessage(tab.id, msg, (resp2)=>{
+                if(chrome.runtime.lastError) setStatus('Error after injection: ' + (chrome.runtime.lastError.message||''));
+                else setStatus('Sent after injection: ' + (msg.type||''));
+              });
+            }, 350);
+          }catch(e){
+            setStatus('Injection failed: ' + (e && e.message ? e.message : e));
+          }
+        } else {
+          setStatus('Sent: ' + (msg.type||''));
+        }
       });
     }catch(e){ setStatus('send error: '+e); }
   }
