@@ -82,6 +82,27 @@
     $('auto-scrape').checked = !!res.nearby_only_auto_scrape;
   });
 
+  // facepp credentials save/load
+  $('facepp_save').addEventListener('click', ()=>{
+    const key = $('facepp_key').value.trim();
+    const secret = $('facepp_secret').value.trim();
+    const endpoint = $('facepp_endpoint').value.trim();
+    if(!key || !secret) return setStatus('Provide key and secret');
+    chrome.storage.local.set({ facepp: { key, secret, endpoint } }, ()=> setStatus('Face++ keys saved'));
+  });
+
+  $('facepp_run').addEventListener('click', async ()=>{
+    setStatus('Starting Face++ detection on stored profiles...');
+    await sendToActive({ type: 'facepp_detect_all' });
+  });
+
+  // load stored facepp keys (do not display secret for security)
+  chrome.storage.local.get({ facepp: {} }, (res)=>{
+    const f = res.facepp || {};
+    if(f.key) $('facepp_key').value = f.key;
+    if(f.endpoint) $('facepp_endpoint').value = f.endpoint;
+  });
+
   // show stored count
   async function refreshCount(){
     chrome.storage.local.get({ nearby_only_profiles: [] }, (res)=>{

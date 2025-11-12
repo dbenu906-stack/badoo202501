@@ -17,6 +17,13 @@
   <button id="export">Export CSV</button>
   <label><input type="checkbox" id="use-pointer"> Use pointer/touch emulation fallback</label>
   <label><input type="checkbox" id="auto-scrape"> Auto-scrape when opening popup</label>
+  <hr>
+  <h4>Face++ (Face Detection)</h4>
+  <label>API Key<br><input id="facepp_key" type="text" style="width:100%"></label>
+  <label>API Secret<br><input id="facepp_secret" type="password" style="width:100%"></label>
+  <label>Endpoint<br><input id="facepp_endpoint" type="text" style="width:100%" value="https://api-us.faceplusplus.com/facepp/v3/detect"></label>
+  <button id="facepp_save">Save Face++ Keys</button>
+  <button id="facepp_run">Run Face++ on stored profiles</button>
   <div id="status" style="margin-top:8px;font-size:12px;color:#444"></div>
   <script src="popup.js"></script>
 </body>
