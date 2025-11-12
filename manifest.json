@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Generic Page Data Extractor (Educational)",
+  "version": "0.1",
+  "description": "Educational extension: extract visible fields from the current page via configurable selectors and export to CSV.",
+  "permissions": [
+    "scripting",
+    "storage",
+    "activeTab"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Page Data Extractor"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "host_permissions": [
+    "<all_urls>"
+  ]
+}

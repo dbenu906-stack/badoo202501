@@ -1,0 +1,117 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Page Data Extractor</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <h3>Page Data Extractor (Educational)</h3>
+
+    <div>
+      <label>Selector - Name</label>
+      <div style="display:flex;gap:6px;align-items:center"><input id="selName" type="text" placeholder=".profile.active .name" value=".profile.active .name" /> <button id="hlName">Highlight</button></div>
+    </div>
+    <div>
+      <label>Selector - Location</label>
+      <div style="display:flex;gap:6px;align-items:center"><input id="selLocation" type="text" placeholder="location selector" value="" /> <button id="hlLocation">Highlight</button></div>
+    </div>
+    <div>
+      <label>Selector - Age</label>
+      <div style="display:flex;gap:6px;align-items:center"><input id="selAge" type="text" placeholder=".profile.active .age" value=".profile.active .age" /> <button id="hlAge">Highlight</button></div>
+    </div>
+    <div>
+      <label>Selector - Bio</label>
+      <div style="display:flex;gap:6px;align-items:center"><input id="selBio" type="text" placeholder=".profile.active .bio" value=".profile.active .bio" /> <button id="hlBio">Highlight</button></div>
+    </div>
+    <div>
+      <label>Selector - Image</label>
+      <div style="display:flex;gap:6px;align-items:center"><input id="selImage" type="text" placeholder=".profile.active img" value=".profile.active img" /> <button id="hlImage">Highlight</button></div>
+    </div>
+    <div>
+      <label>Next button selector (optional)</label>
+      <div style="display:flex;gap:6px;align-items:center"><input id="selNext" type="text" placeholder="#nextBtn" value="#nextBtn" /> <button id="hlNext">Highlight</button></div>
+    </div>
+
+    <div style="margin-top:6px;display:flex;gap:6px;align-items:center">
+      <label style="margin:0">Presets</label>
+      <select id="presetSelect" style="flex:1"></select>
+      <input id="presetName" placeholder="preset name" style="flex:1" />
+      <button id="savePreset">Save</button>
+      <button id="deletePreset">Delete</button>
+    </div>
+
+    <div style="margin-top:8px;">
+      <button id="btnExtract">Extract Visible</button>
+      <button id="btnNext">Click Next</button>
+      <button id="btnAuto">Auto Extract</button>
+      <button id="btnStopAuto">Stop</button>
+      <label style="margin-left:8px;">Auto Swiper Delay (ms):</label>
+      <input id="autoDelay" type="number" min="100" max="10000" value="900" style="width:80px;" />
+  <button id="btnExport">Export CSV</button>
+  <button id="btnExportZip">Download Images (ZIP)</button>
+  <button id="btnExportWithImages">Export CSV with images (base64)</button>
+      <label style="margin-left:8px;">Image Filter:</label>
+      <select id="imgFilter">
+        <option value="none">None</option>
+        <option value="grayscale">Grayscale</option>
+        <option value="pixelate">Pixelate</option>
+        <option value="blur">Blur</option>
+      </select>
+      <button id="btnPreview">Preview</button>
+      <button id="btnClear">Clear</button>
+    </div>
+
+    <hr />
+    <div style="margin-top:6px;padding:6px;border:1px solid #eee;border-radius:6px;background:#fafafa">
+      <strong>Local face detection (face-api.js)</strong>
+      <div style="font-size:12px;margin-top:6px;color:#333">
+        Detect faces locally in the browser using face-api.js models. Models must be available under the extension's <code>models/</code> folder. This keeps images on-device.
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;margin-top:6px">
+        <label><input id="faceppEnable" type="checkbox" /> Enable local face detection</label>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;margin-top:6px">
+        <label style="font-size:12px"><input id="faceppConsent" type="checkbox" /> I confirm I have consent to process these images locally</label>
+      </div>
+      <div style="margin-top:6px;display:flex;gap:6px;align-items:center">
+        <label style="margin-right:8px">Face anonymization:</label>
+        <select id="faceppMethod">
+          <option value="pixelate">Pixelate faces</option>
+          <option value="blur">Blur faces</option>
+        </select>
+      </div>
+      <div style="margin-top:6px;font-size:12px;color:#666">Tip: Place face-api model files (tiny_face_detector_model-weights_manifest.json and binaries) into <code>/extension/models/</code>.</div>
+      <div style="margin-top:6px;font-size:13px">
+        Models status: <span id="modelsStatus" style="font-weight:600;color:crimson">Not loaded</span>
+      </div>
+      <div style="margin-top:6px;display:flex;gap:6px;align-items:center">
+        <button id="btnDownloadModels">Download models</button>
+        <label style="font-size:12px;margin-left:8px"><input id="useTouchSwipe" type="checkbox" /> Use touch-swipe emulation</label>
+      </div>
+      <div style="margin-top:6px;display:flex;gap:8px;align-items:center">
+        <label style="font-size:12px">Swipe distance (%) <input id="swipeDistance" type="number" min="10" max="100" value="70" style="width:70px;margin-left:6px"/></label>
+        <label style="font-size:12px">Steps <input id="swipeSteps" type="number" min="1" max="30" value="6" style="width:60px;margin-left:6px"/></label>
+        <label style="font-size:12px">Duration ms <input id="swipeDuration" type="number" min="50" max="2000" value="300" style="width:80px;margin-left:6px"/></label>
+      </div>
+    </div>
+
+    <hr />
+    <div id="resultsContainer">
+      <table id="resultsTable">
+  <thead><tr><th>#</th><th>Thumb</th><th>Name</th><th>Age</th><th>Bio</th><th>Image URL</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div id="status" style="margin-top:8px;font-size:12px;color:#333"></div>
+    <div style="margin-top:6px">
+      <progress id="progressBar" value="0" max="100" style="width:100%"></progress>
+    </div>
+
+  <script src="face-api.min.js"></script>
+  <script src="jszip-shim.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
