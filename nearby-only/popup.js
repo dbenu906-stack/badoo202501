@@ -68,7 +68,8 @@
       };
       for(const p of arr){
         idx++;
-        const url = p.image || '';
+        // prefer a larger candidate when available: use images[] if present, otherwise p.image
+        const url = getBestImageUrl(p) || '';
         // prefer profile id for filename, otherwise sanitized name, otherwise fallback to index
         let base = '';
         if(p.id) base = `id_${sanitizeFilename(p.id)}`;
@@ -91,7 +92,7 @@
               files.push({name: filename, data: blob});
             }
           } else { files.push({name: `${finalBase}_noimage.txt`, data: new Blob([`Failed to fetch: ${url}`], {type:'text/plain'})}); }
-      }
+  }
       // add CSV summary
       const csv = toCSV(arr);
       files.push({name: 'profiles.csv', data: new Blob([csv], {type:'text/csv'})});
@@ -121,6 +122,42 @@
       const res = await fetch(url, {mode:'cors'});
       if(!res.ok) return null; return await res.blob();
     }catch(e){ console.warn('fetchAsBlob failed', url, e); return null; }
+  }
+
+  // Attempt to return a higher-resolution image URL for a profile
+  function getBestImageUrl(p){
+    try{
+      if(!p) return '';
+      const candidates = [];
+      if(Array.isArray(p.images) && p.images.length){
+        for(const u of p.images) if(u) candidates.push(u);
+      }
+      if(p.image) candidates.push(p.image);
+      if(!candidates.length) return '';
+      // prefer the longest URL (heuristic for higher-res) after trying simple upscale transformations
+      const transformed = candidates.map(u => ({orig:u, alt: tryExpandUrl(u)}));
+      // pick the alt with the longest length
+      transformed.sort((a,b)=> (b.alt||b.orig).length - (a.alt||a.orig).length);
+      return transformed[0].alt || transformed[0].orig;
+    }catch(e){ return p.image || ''; }
+  }
+
+  function tryExpandUrl(u){
+    if(!u || typeof u !== 'string') return u;
+    try{
+      let url = u;
+      // strip common thumbnail query params like ?size=200 or &width=200
+      url = url.replace(/[?&](size|width|height)=[0-9]+/gi, '');
+      // remove leftover trailing ? or &
+      url = url.replace(/[?&]$/,'');
+      // replace common path segments
+      url = url.replace(/\/thumb\//i, '/');
+      url = url.replace(/\/small\//i, '/original/');
+      url = url.replace(/(?:_thumb|_small|\-thumb|\-small|thumb_|small_)/gi, '');
+      // some CDNs use sXXX or wXXX tokens, try removing _sXXX or _wXXX before extension
+      url = url.replace(/_s?\d+(?=\.)/i, '');
+      return url;
+    }catch(e){ return u; }
   }
 
   // Create a ZIP Blob from an array of {name, data: Blob}
