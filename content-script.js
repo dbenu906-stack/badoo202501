@@ -113,6 +113,7 @@
   // Scroll the nearby list (or window) in steps and scrape incrementally.
   async function scrollAndScrapeNearby({maxSteps=100, stepDelay=700, stopIfNoNew=6} = {}){
     try{
+      console.debug('[content-script] start scrollAndScrapeNearby', {maxSteps, stepDelay, stopIfNoNew});
       const nearbyList = document.querySelector('div.people-nearby__content');
       const container = nearbyList ? (nearbyList.querySelector('ul') || nearbyList) : document.scrollingElement || document.documentElement || window;
       let lastCount = 0;
@@ -124,13 +125,17 @@
       for(let step=0; step<maxSteps; step++){
         // scrape current viewport
         const found = getVisibleProfiles() || [];
+        console.debug('[content-script] scroll step', {step, foundCount: found.length, collectedCount: collected.length});
         // dedupe against collected
         for(const p of found){
           const key = (p.image||'')+'||'+(p.name||'');
           if(!collected.find(x => (x.image||'')+'||'+(x.name||'') === key)) collected.push(p);
         }
         // send incremental update to background so data persists mid-scroll
-        if(found.length) sendProfiles(found);
+        if(found.length){
+          console.debug('[content-script] sending incremental profiles', found.length);
+          sendProfiles(found);
+        }
 
         if(collected.length > lastCount){ lastCount = collected.length; noNew = 0; }
         else { noNew++; }
@@ -159,7 +164,8 @@
       }
 
       // final persist of collected set
-      if(collected.length) sendProfiles(collected);
+      if(collected.length){ console.debug('[content-script] final send collected', collected.length); sendProfiles(collected); }
+      console.debug('[content-script] scrollAndScrapeNearby finished', {collected: collected.length});
       return collected;
     }catch(err){ console.warn('scrollAndScrapeNearby failed', err); return []; }
   }
