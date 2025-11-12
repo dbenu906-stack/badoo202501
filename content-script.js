@@ -46,8 +46,11 @@
       const nearbyList = document.querySelector('div.people-nearby__content');
       if(nearbyList){
         const items = nearbyList.querySelectorAll('ul > li, ul li');
+        console.debug('[content-script] nearbyList found, items:', items ? items.length : 0);
         if(items && items.length){
+          let idx = 0;
           for(const it of items){
+            idx++;
             try{
               // name and age elements use csms-profile-info__name / __age
               // prefer explicit attributes/classes present in the nearby list
@@ -67,6 +70,7 @@
               if(seen.has(key)) continue;
               seen.add(key);
               out.push({id: userId||'', name: name||'', age: age||'', image: image||''});
+              if(idx <= 10) console.debug('[content-script] found item', {idx, key, id: userId, name, age, image});
             }catch(e){ /* ignore item errors */ }
           }
           // return prioritized results (images + name first)
