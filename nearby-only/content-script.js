@@ -51,7 +51,9 @@
   }
 
   function findNearbyUL(){
-    return document.querySelector('ul.csms-user-list')
+    // Prefer the full page-container path the user provided, it's the most specific
+    return document.querySelector('#page-container > div > div > div:nth-child(3) > div.people-nearby__content > div:nth-child(1) > ul')
+      || document.querySelector('ul.csms-user-list')
       || document.querySelector('ul[class*="csms-user-list"]')
       || document.querySelector('div.people-nearby__content ul')
       || null;
