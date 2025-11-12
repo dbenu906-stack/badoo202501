@@ -1,10 +1,12 @@
 // Save recommended Badoo selectors as a preset on load if not present
 const BADOO_PRESET = {
-  name: '.profile-card-info__name [data-qa="profile-info__name"]',
-  age: '.profile-card-info__name [data-qa="profile-info__age"]',
-  bio: '[data-qa-tiw-option-header]',
-  image: '.multimedia-image__image',
-  location: '#page-container > div > div > div.csms-screen__block.csms-screen__block--align-stretch > div:nth-child(2) > div > div > div.profile-card-full__content > div > div.profile-card__content-scroller > div > div > div:nth-child(7) > section',
+  // Generalized selectors for the people-nearby list items (class-based, not brittle nth-child chains)
+  name: '.csms-profile-info__name',
+  age: '.csms-profile-info__age',
+  bio: '.profile-card__bio, .csms-user-list-cell__text',
+  image: '.csms-user-list-cell__media img, .multimedia-image__image',
+  // location/next left as conservative defaults
+  location: '',
   next: 'button.profile-action[data-qa="profile-card-action-vote-no"]'
 };
 const BADOO_PRESET_NAME = 'Badoo Example';
@@ -855,6 +857,20 @@ document.addEventListener('DOMContentLoaded', ()=>{
   document.getElementById('btnClear').addEventListener('click', clearRows);
   document.getElementById('btnExportWithImages')?.addEventListener('click', exportCSVWithImages);
   document.getElementById('btnAuto')?.addEventListener('click', startAutoExtract);
+  // Load profiles scraped by content script (nearby pages)
+  const loadNearbyBtn = document.getElementById('btnLoadNearby');
+  if(loadNearbyBtn){
+    loadNearbyBtn.addEventListener('click', ()=>{
+      chrome.storage.local.get({nearby_profiles:[]}, data=>{
+        const arr = Array.isArray(data.nearby_profiles) ? data.nearby_profiles : [];
+        if(arr.length===0) return alert('No nearby profiles saved yet');
+        // merge into rows and render
+        for(const p of arr){ rows.push({name: p.name||'', age:'', bio:'', image: p.image||''}); }
+        renderRows();
+        setStatus(`Loaded ${arr.length} nearby profiles`);
+      });
+    });
+  }
   document.getElementById('btnStopAuto')?.addEventListener('click', stopAutoExtract);
   document.getElementById('btnPreview')?.addEventListener('click', previewFirstImage);
   // highlight buttons

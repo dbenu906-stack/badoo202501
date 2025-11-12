@@ -1,0 +1,147 @@
+// Content script: detect when the Nearby tab (or people-nearby page) is opened
+// and scrape visible profile cards (name and image heuristics). Sends data to
+// the extension background to store under `nearby_profiles`.
+
+(function(){
+  const NEARBY_TAB_SELECTOR = '#tabbar > nav > button:nth-child(2)';
+
+  function getImageFromElement(el){
+    try{
+      if(!el) return '';
+      // prefer img tags
+      const img = el.querySelector('img');
+      if(img){ return img.src || img.getAttribute('src') || img.getAttribute('data-src') || ''; }
+      // check attributes on element
+      const attr = el.getAttribute && (el.getAttribute('data-src') || el.getAttribute('data-original') || el.getAttribute('src'));
+      if(attr) return attr;
+      // background-image
+      const style = window.getComputedStyle(el);
+      if(style && style.backgroundImage && style.backgroundImage !== 'none'){
+        const m = style.backgroundImage.match(/url\((?:"|')?(.*?)(?:"|')?\)/);
+        if(m) return m[1];
+      }
+    }catch(e){ console.warn('getImageFromElement error', e); }
+    return '';
+  }
+
+  function getNameFromElement(el){
+    try{
+      // try common subselectors used on Badoo-ish cards
+      const nameEl = el.querySelector('[data-qa*="name"]') || el.querySelector('.name') || el.querySelector('h3') || el.querySelector('h2') || el.querySelector('.profile-card-info__name');
+      if(nameEl) return nameEl.innerText.trim();
+      // fallback: first text node inside the card
+      const txt = el.innerText || '';
+      const lines = txt.split(/\n/).map(s=>s.trim()).filter(Boolean);
+      return lines.length ? lines[0] : '';
+    }catch(e){ console.warn('getNameFromElement error', e); }
+    return '';
+  }
+
+  function extractProfilesFromDOM(){
+    const out = [];
+    const seen = new Set();
+
+    // Prefer structured people-nearby list if present (use class-based selectors you provided)
+    try{
+      const nearbyList = document.querySelector('div.people-nearby__content');
+      if(nearbyList){
+        const items = nearbyList.querySelectorAll('ul > li, ul li');
+        if(items && items.length){
+          for(const it of items){
+            try{
+              // name and age elements use csms-profile-info__name / __age
+              const nameEl = it.querySelector('.csms-profile-info__name, [data-qa*="profile-info__name"]');
+              const ageEl = it.querySelector('.csms-profile-info__age, [data-qa*="profile-info__age"]');
+              const imgEl = it.querySelector('.csms-user-list-cell__media img, img');
+              const name = nameEl ? nameEl.innerText.trim() : getNameFromElement(it);
+              const image = imgEl ? (imgEl.src || imgEl.getAttribute('src') || imgEl.getAttribute('data-src') || '') : getImageFromElement(it);
+              const key = (image||'') + '||' + (name||'');
+              if(!name && !image) continue;
+              if(seen.has(key)) continue;
+              seen.add(key);
+              out.push({name: name||'', image: image||''});
+            }catch(e){ /* ignore item errors */ }
+          }
+          // return prioritized results (images + name first)
+          out.sort((a,b)=>{ const wa = (a.image?1:0)+(a.name?1:0); const wb = (b.image?1:0)+(b.name?1:0); return wb-wa; });
+          return out.slice(0, 500);
+        }
+      }
+    }catch(e){ console.warn('nearby list extraction failed', e); }
+
+    // Fallback heuristics if structured list not present
+    const candidates = Array.from(document.querySelectorAll('article, a, div, li'));
+    for(const c of candidates){
+      // skip tiny nodes
+      const rect = c.getBoundingClientRect && c.getBoundingClientRect();
+      if(rect && rect.width < 40 && rect.height < 40) continue;
+      const img = getImageFromElement(c);
+      const name = getNameFromElement(c);
+      if(!img && !name) continue;
+      const key = (img||'') + '||' + (name||'');
+      if(seen.has(key)) continue;
+      seen.add(key);
+      out.push({name: name || '', image: img || ''});
+    }
+    // Prioritize items that include images and have some name
+    out.sort((a,b)=>{ const wa = (a.image?1:0)+(a.name?1:0); const wb = (b.image?1:0)+(b.name?1:0); return wb-wa; });
+    // Limit to a reasonable number
+    return out.slice(0, 500);
+  }
+
+  function sendProfiles(profiles){
+    try{
+      if(!profiles || !profiles.length) return;
+      chrome.runtime.sendMessage({type:'nearby_profiles', profiles});
+    }catch(e){ console.warn('sendProfiles error', e); }
+  }
+
+  function runScrapeOnce(){
+    try{
+      const profiles = extractProfilesFromDOM();
+      sendProfiles(profiles);
+    }catch(e){ console.warn('runScrapeOnce failed', e); }
+  }
+
+  // When the page URL is a people-nearby page, run once on load
+  try{
+    if(location && /people[-_]nearby|people-nearby|people\/nearby|nearby/.test(location.pathname+location.href)){
+      // small delay to allow dynamic content to render
+      setTimeout(runScrapeOnce, 700);
+    }
+  }catch(e){}
+
+  // Listen for clicks on the specific tab button, then scrape shortly after the click
+  document.addEventListener('click', (ev) => {
+    try{
+      const btn = ev.target.closest && ev.target.closest(NEARBY_TAB_SELECTOR);
+      if(btn){ setTimeout(runScrapeOnce, 700); }
+    }catch(e){}
+  }, true);
+
+  // Also observe mutations on #tabbar to detect the tab becoming active
+  const tabbar = document.querySelector('#tabbar');
+  if(tabbar){
+    const mo = new MutationObserver((mutations)=>{
+      for(const m of mutations){
+        if(m.type === 'attributes' || m.addedNodes.length){
+          // if nearby tab gains an "active" indicator, run
+          const btn = document.querySelector(NEARBY_TAB_SELECTOR);
+          if(btn && (btn.classList.contains('active') || btn.getAttribute('aria-pressed') === 'true' || btn.getAttribute('aria-selected') === 'true')){
+            setTimeout(runScrapeOnce, 500);
+            return;
+          }
+        }
+      }
+    });
+    try{ mo.observe(tabbar, {subtree:true, childList:true, attributes:true}); }catch(e){}
+  }
+
+  // Also run on navigation changes (single-page app) by listening to pushState/replaceState
+  (function(history){
+    const _push = history.pushState; history.pushState = function(){ _push.apply(this, arguments); setTimeout(()=>{ if(/people[-_]nearby|people-nearby|people\/nearby|nearby/.test(location.pathname+location.href)) runScrapeOnce(); }, 600); };
+    const _replace = history.replaceState; history.replaceState = function(){ _replace.apply(this, arguments); setTimeout(()=>{ if(/people[-_]nearby|people-nearby|people\/nearby|nearby/.test(location.pathname+location.href)) runScrapeOnce(); }, 600); };
+    window.addEventListener('popstate', ()=>{ if(/people[-_]nearby|people-nearby|people\/nearby|nearby/.test(location.pathname+location.href)) setTimeout(runScrapeOnce, 600); });
+  })(window.history);
+
+})();
