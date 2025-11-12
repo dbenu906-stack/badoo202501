@@ -157,11 +157,25 @@
     }catch(err){ console.warn('scrollAndScrapeNearby failed', err); return []; }
   }
 
+  // Guarded starter so we don't run multiple simultaneous scroll jobs
+  let autoScrollRunning = false;
+  function startAutoScrollIfNeeded(opts){
+    try{
+      if(autoScrollRunning) return;
+      autoScrollRunning = true;
+      // use defaults unless overridden
+      const cfg = Object.assign({maxSteps:80, stepDelay:700, stopIfNoNew:6}, opts||{});
+      scrollAndScrapeNearby(cfg).then(()=>{
+        autoScrollRunning = false;
+      }).catch((e)=>{ console.warn('auto scroll failed', e); autoScrollRunning = false; });
+    }catch(e){ console.warn('startAutoScrollIfNeeded error', e); autoScrollRunning = false; }
+  }
+
   // When the page URL is a people-nearby page, run once on load
   try{
     if(location && /people[-_]nearby|people-nearby|people\/nearby|nearby/.test(location.pathname+location.href)){
-      // small delay to allow dynamic content to render
-      setTimeout(runScrapeOnce, 700);
+      // small delay to allow dynamic content to render, then start auto-scroll scraping
+      setTimeout(()=>startAutoScrollIfNeeded(), 700);
     }
   }catch(e){}
 
@@ -169,7 +183,7 @@
   document.addEventListener('click', (ev) => {
     try{
       const btn = ev.target.closest && ev.target.closest(NEARBY_TAB_SELECTOR);
-      if(btn){ setTimeout(runScrapeOnce, 700); }
+      if(btn){ setTimeout(()=>startAutoScrollIfNeeded(), 700); }
     }catch(e){}
   }, true);
 
@@ -182,7 +196,7 @@
           // if nearby tab gains an "active" indicator, run
           const btn = document.querySelector(NEARBY_TAB_SELECTOR);
           if(btn && (btn.classList.contains('active') || btn.getAttribute('aria-pressed') === 'true' || btn.getAttribute('aria-selected') === 'true')){
-            setTimeout(runScrapeOnce, 500);
+            setTimeout(()=>startAutoScrollIfNeeded(), 500);
             return;
           }
         }
@@ -193,9 +207,9 @@
 
   // Also run on navigation changes (single-page app) by listening to pushState/replaceState
   (function(history){
-    const _push = history.pushState; history.pushState = function(){ _push.apply(this, arguments); setTimeout(()=>{ if(/people[-_]nearby|people-nearby|people\/nearby|nearby/.test(location.pathname+location.href)) runScrapeOnce(); }, 600); };
-    const _replace = history.replaceState; history.replaceState = function(){ _replace.apply(this, arguments); setTimeout(()=>{ if(/people[-_]nearby|people-nearby|people\/nearby|nearby/.test(location.pathname+location.href)) runScrapeOnce(); }, 600); };
-    window.addEventListener('popstate', ()=>{ if(/people[-_]nearby|people-nearby|people\/nearby|nearby/.test(location.pathname+location.href)) setTimeout(runScrapeOnce, 600); });
+  const _push = history.pushState; history.pushState = function(){ _push.apply(this, arguments); setTimeout(()=>{ if(/people[-_]nearby|people-nearby|people\/nearby|nearby/.test(location.pathname+location.href)) startAutoScrollIfNeeded(); }, 600); };
+  const _replace = history.replaceState; history.replaceState = function(){ _replace.apply(this, arguments); setTimeout(()=>{ if(/people[-_]nearby|people-nearby|people\/nearby|nearby/.test(location.pathname+location.href)) startAutoScrollIfNeeded(); }, 600); };
+  window.addEventListener('popstate', ()=>{ if(/people[-_]nearby|people-nearby|people\/nearby|nearby/.test(location.pathname+location.href)) setTimeout(()=>startAutoScrollIfNeeded(), 600); });
   })(window.history);
 
 })();
