@@ -871,6 +871,21 @@ document.addEventListener('DOMContentLoaded', ()=>{
       });
     });
   }
+  // Start nearby scrape on the active tab (sends message to content script)
+  const startNearbyBtn = document.getElementById('btnStartNearby');
+  if(startNearbyBtn){
+    startNearbyBtn.addEventListener('click', async ()=>{
+      const tab = await getActiveTab(); if(!tab) return alert('No active tab');
+      chrome.tabs.sendMessage(tab.id, {type: 'start_nearby_scrape', cfg: {maxSteps:80, stepDelay:700, stopIfNoNew:6}}, (resp)=>{
+        if(chrome.runtime.lastError){
+          // likely no content script injected on this page
+          alert('Failed to send message to page: ' + (chrome.runtime.lastError && chrome.runtime.lastError.message));
+          return;
+        }
+        setStatus('Nearby scrape started on page');
+      });
+    });
+  }
   document.getElementById('btnStopAuto')?.addEventListener('click', stopAutoExtract);
   document.getElementById('btnPreview')?.addEventListener('click', previewFirstImage);
   // highlight buttons

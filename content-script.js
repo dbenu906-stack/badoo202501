@@ -184,6 +184,19 @@
     }catch(e){ console.warn('startAutoScrollIfNeeded error', e); autoScrollRunning = false; }
   }
 
+  // Allow external triggers (popup) to start the nearby scrape on demand
+  try{
+    chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+      try{
+        if(msg && msg.type === 'start_nearby_scrape'){
+          startAutoScrollIfNeeded(msg.cfg || {});
+          sendResponse({started: true});
+          return true;
+        }
+      }catch(e){ console.warn('onMessage start_nearby_scrape error', e); }
+    });
+  }catch(e){ /* chrome.runtime may not be available in some contexts */ }
+
   // When the page URL is a people-nearby page, run once on load
   try{
     if(location && /people[-_]nearby|people-nearby|people\/nearby|nearby/.test(location.pathname+location.href)){
