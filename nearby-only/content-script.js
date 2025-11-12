@@ -181,20 +181,157 @@
   try{
     chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       try{
-        if(!msg) return;
-        if(msg.type === 'start_nearby_only'){
-          __nearby_only_should_stop = false;
-          autoScrollAndCollect(msg.cfg || {});
-          sendResponse({started:true});
-          return true;
-        }
-        if(msg.type === 'stop_nearby_only'){
-          __nearby_only_should_stop = true;
-          sendResponse({stopped:true});
-          return true;
-        }
+      if(!msg) return;
+      if(msg.type === 'start_nearby_only'){
+        __nearby_only_should_stop = false;
+        autoScrollAndCollect(msg.cfg || {});
+        sendResponse({started:true});
+        return true;
+      }
+      if(msg.type === 'stop_nearby_only'){
+        __nearby_only_should_stop = true;
+        sendResponse({stopped:true});
+        return true;
+      }
+      if(msg.type === 'start_nearby_click_and_scrape'){
+        __nearby_only_should_stop = false;
+        startClickAndScrape(msg.cfg || {});
+        sendResponse({started:true});
+        return true;
+      }
       }catch(e){ LOG('onMessage error', e); }
     });
   }catch(e){}
+
+  // --- Click-through scraping (open each profile, scrape, close) ---
+  let __nearby_click_running = false;
+
+  function createMouseIndicator(){
+    let el = document.getElementById('__nearby_only_mouse');
+    if(el) return el;
+    el = document.createElement('div');
+    el.id = '__nearby_only_mouse';
+    el.style.position = 'fixed';
+    el.style.zIndex = 9999999;
+    el.style.width = '16px';
+    el.style.height = '16px';
+    el.style.border = '3px solid rgba(0,150,136,0.95)';
+    el.style.borderRadius = '50%';
+    el.style.background = 'rgba(0,150,136,0.12)';
+    el.style.pointerEvents = 'none';
+    el.style.transition = 'left 0.18s linear, top 0.18s linear';
+    document.documentElement.appendChild(el);
+    return el;
+  }
+
+  function moveMouseIndicatorTo(x,y){
+    const el = createMouseIndicator();
+    el.style.left = (x - 8) + 'px';
+    el.style.top = (y - 8) + 'px';
+  }
+
+  function synthesizeMouseEvent(target, type, clientX, clientY){
+    try{
+      const ev = new MouseEvent(type, {view: window, bubbles: true, cancelable: true, clientX, clientY, button: 0});
+      target.dispatchEvent(ev);
+    }catch(e){ /* ignore */ }
+  }
+
+  async function moveAndClickElement(el){
+    if(!el) return false;
+    const rect = el.getBoundingClientRect();
+    const cx = Math.floor(rect.left + rect.width/2);
+    const cy = Math.floor(rect.top + rect.height/2);
+    try{ el.scrollIntoView({behavior:'auto', block:'center', inline:'center'}); }catch(e){}
+    moveMouseIndicatorTo(cx, cy);
+    await new Promise(r => setTimeout(r, 180));
+    try{
+      el.focus && el.focus();
+      synthesizeMouseEvent(el, 'mousemove', cx, cy);
+      synthesizeMouseEvent(el, 'mouseover', cx, cy);
+      synthesizeMouseEvent(el, 'mousedown', cx, cy);
+      synthesizeMouseEvent(el, 'click', cx, cy);
+      synthesizeMouseEvent(el, 'mouseup', cx, cy);
+    }catch(e){ LOG('click synth error', e); }
+    await new Promise(r => setTimeout(r, 280));
+    return true;
+  }
+
+  async function waitForProfileOpen(timeout = 2200){
+    const start = Date.now();
+    const selectors = ['[data-qa="profile-page"]', '.csms-profile-page', '.profile-page', '.user-profile', '.profile-modal', '[data-qa="user-profile"]'];
+    while(Date.now() - start < timeout){
+      for(const s of selectors){
+        const el = document.querySelector(s);
+        if(el) return el;
+      }
+      await new Promise(r => setTimeout(r, 150));
+    }
+    return null;
+  }
+
+  function scrapeOpenProfile(){
+    try{
+      const root = document.querySelector('[data-qa="profile-page"]') || document.querySelector('.csms-profile-page') || document.querySelector('.profile-page') || document.querySelector('.user-profile') || document.body;
+      const nameEl = root.querySelector('.csms-profile-info__name-inner') || root.querySelector('[data-qa="profile-info__name"]') || root.querySelector('h1') || null;
+      const ageEl = root.querySelector('[data-qa="profile-info__age"]') || root.querySelector('.profile-age') || null;
+      const imgs = Array.from(root.querySelectorAll('img')).map(i=> i.src || i.getAttribute('src') || '').filter(Boolean);
+      const idBtn = root.querySelector('button[data-qa-user-id]') || document.querySelector('button[data-qa-user-id]');
+      const id = idBtn ? (idBtn.getAttribute('data-qa-user-id')||'') : '';
+      const name = nameEl ? (nameEl.innerText || nameEl.textContent || '').trim() : '';
+      const age = ageEl ? (ageEl.innerText || ageEl.textContent || '').trim().replace(/^,\s*/,'') : '';
+      return { id, name, age, images: imgs.slice(0,8) };
+    }catch(e){ LOG('scrapeOpenProfile error', e); return null; }
+  }
+
+  function closeProfileView(){
+    try{
+      const closeButtons = Array.from(document.querySelectorAll('button[aria-label*="close" i], button[title*="Close" i], button.csms-close, .csms-modal__close'));
+      for(const b of closeButtons){ try{ b.click(); return true; }catch(e){} }
+      document.dispatchEvent(new KeyboardEvent('keydown', {key:'Escape', keyCode:27, which:27, bubbles:true}));
+      try{ history.back(); }catch(e){}
+    }catch(e){}
+    return false;
+  }
+
+  async function clickAndScrapeNearby(cfg = {}){
+    if(__nearby_click_running) return;
+    __nearby_click_running = true;
+    try{
+      const list = findNearbyUL();
+      if(!list){ LOG('clickAndScrapeNearby: nearby list not found'); __nearby_click_running = false; return; }
+      const items = Array.from(list.querySelectorAll('li.csms-user-list__item, li'));
+      LOG('clickAndScrapeNearby items', items.length);
+      const results = [];
+      let count = 0;
+      for(const it of items){
+        if(__nearby_only_should_stop) break;
+        if(count >= (cfg.maxProfiles || 500)) break;
+        const img = it.querySelector('.csms-avatar__image') || it.querySelector('img');
+        const clickTarget = img || it.querySelector('button[data-qa-user-id]') || it.querySelector('button');
+        if(!clickTarget) continue;
+        await moveAndClickElement(clickTarget);
+        const opened = await waitForProfileOpen(cfg.openTimeout || 2000);
+        if(opened){
+          await new Promise(r => setTimeout(r, 200));
+          const data = scrapeOpenProfile();
+          if(data){
+            LOG('scraped', data.name || data.id, data.images && data.images.length);
+            results.push(data);
+            try{ chrome.runtime.sendMessage({type:'nearby_only_profiles', profiles: [ { id: data.id||'', name: data.name||'', age: data.age||'', image: (data.images && data.images[0])||'' } ]}); }catch(e){}
+          }
+          closeProfileView();
+        } else {
+          LOG('profile not opened');
+        }
+        count++;
+        await new Promise(r => setTimeout(r, cfg.perProfileDelay || 600));
+      }
+      LOG('clickAndScrapeNearby finished', results.length);
+    }catch(e){ LOG('clickAndScrapeNearby error', e); }
+    __nearby_click_running = false;
+  }
+
+  function startClickAndScrape(cfg){ try{ clickAndScrapeNearby(cfg || {}); }catch(e){ LOG('startClickAndScrape', e); } }
 
 })();
