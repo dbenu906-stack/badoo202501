@@ -63,8 +63,17 @@
         const ext = (url.split('?')[0].split('.').pop() || 'jpg').slice(0,6);
         const filename = `${safeName}.${ext}`;
         const blob = await fetchAsBlob(url);
-        if(blob){ files.push({name: filename, data: blob}); }
-        else { files.push({name: `${safeName}_noimage.txt`, data: new Blob([`Failed to fetch: ${url}`], {type:'text/plain'})}); }
+          if(blob){
+            try{
+              setStatus(`Processing image ${idx}/${arr.length}...`);
+              const filter = document.getElementById('imgFilter')?.value || 'none';
+              const processed = await processImageBlob(blob, filter);
+              files.push({name: filename, data: processed});
+            }catch(e){
+              console.warn('processing failed, adding original', e);
+              files.push({name: filename, data: blob});
+            }
+          } else { files.push({name: `${safeName}_noimage.txt`, data: new Blob([`Failed to fetch: ${url}`], {type:'text/plain'})}); }
       }
       // add CSV summary
       const csv = toCSV(arr);
@@ -129,6 +138,139 @@
     for(const c of centralDir) blobParts.push(c instanceof Uint8Array ? c : new Uint8Array(c));
     blobParts.push(eocdr);
     return new Blob(blobParts, {type:'application/zip'});
+  }
+
+  // ---------------------- Image processing helpers ----------------------
+  // Apply selected filter (none|grayscale|pixelate|blur) to an image Blob and return a processed Blob (PNG)
+  async function processImageBlob(blob, filter){
+    // If face anonymization is enabled in the UI, attempt to detect faces via face-api.js
+    let faceRects = null;
+    try{
+      const enableFace = document.getElementById('faceppEnable')?.checked;
+      if(enableFace && typeof faceapi !== 'undefined'){
+        try{ faceRects = await detectFacesWithFaceApi(blob); }catch(e){ console.warn('Local face detection failed', e); }
+      }
+    }catch(e){ /* ignore */ }
+
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = async () => {
+        try{
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          canvas.width = img.naturalWidth;
+          canvas.height = img.naturalHeight;
+          // draw original image
+          ctx.drawImage(img, 0, 0);
+
+          // anonymize faces first
+          if(faceRects && faceRects.length > 0){
+            const method = document.getElementById('faceppMethod')?.value || 'pixelate';
+            await applyFaceAnonymization(canvas, faceRects, method);
+          }
+
+          // apply global filter
+          await applyGlobalFilter(canvas, filter || 'none');
+
+          canvas.toBlob((b)=>{ if(b) resolve(b); else reject(new Error('toBlob failed')); }, 'image/png');
+        }catch(err){ reject(err); }
+      };
+      img.onerror = (e)=> reject(new Error('Image load error'));
+      const url = URL.createObjectURL(blob);
+      img.crossOrigin = 'anonymous';
+      img.src = url;
+      img.addEventListener('load', ()=> URL.revokeObjectURL(url));
+    });
+  }
+
+  // Local face detection using face-api.js and extension-local models (if available)
+  async function detectFacesWithFaceApi(blob){
+    if(typeof faceapi === 'undefined') throw new Error('face-api.js not loaded');
+    // Attempt to load local models from extension (models/ folder)
+    await ensureFaceApiModels();
+    const img = await new Promise((res, rej)=>{
+      const i = new Image(); const url = URL.createObjectURL(blob);
+      i.onload = ()=>{ URL.revokeObjectURL(url); res(i); };
+      i.onerror = (e)=>{ URL.revokeObjectURL(url); rej(e); };
+      i.crossOrigin = 'anonymous'; i.src = url;
+    });
+    const detections = await faceapi.detectAllFaces(img, new faceapi.TinyFaceDetectorOptions({inputSize: 512, scoreThreshold: 0.5}));
+    return detections.map(d=>({ x: Math.round(d.box.x), y: Math.round(d.box.y), width: Math.round(d.box.width), height: Math.round(d.box.height) }));
+  }
+
+  async function ensureFaceApiModels(modelPath='models'){
+    if(typeof faceapi === 'undefined') throw new Error('face-api.js not loaded');
+    if(window.__nearby_only_faceapi_loaded) return;
+    const modelBaseLocal = chrome && chrome.runtime && chrome.runtime.getURL ? chrome.runtime.getURL(modelPath) : modelPath;
+    try{
+      await faceapi.nets.tinyFaceDetector.loadFromUri(modelBaseLocal);
+      window.__nearby_only_faceapi_loaded = true;
+      return;
+    }catch(localErr){
+      console.warn('Local model load failed, trying remote fallback', localErr && localErr.message);
+    }
+    // fallback remote
+    const fallback = 'https://justadudewhohacks.github.io/face-api.js/models';
+    await faceapi.nets.tinyFaceDetector.loadFromUri(fallback);
+    window.__nearby_only_faceapi_loaded = true;
+  }
+
+  // Apply anonymization to face rectangles on the given canvas
+  async function applyFaceAnonymization(canvas, rects, method){
+    const ctx = canvas.getContext('2d');
+    for(const r of rects){
+      const sx = r.x || r.left || 0;
+      const sy = r.y || r.top || 0;
+      const sw = r.width || r.w || 0;
+      const sh = r.height || r.h || 0;
+      if(sw <=0 || sh<=0) continue;
+      if(method === 'pixelate'){
+        const tmp = document.createElement('canvas');
+        const scale = Math.max(2, Math.floor(Math.min(sw, sh) / 10));
+        tmp.width = Math.max(1, Math.floor(sw / scale));
+        tmp.height = Math.max(1, Math.floor(sh / scale));
+        const tctx = tmp.getContext('2d');
+        tctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, tmp.width, tmp.height);
+        ctx.imageSmoothingEnabled = false;
+        ctx.clearRect(sx, sy, sw, sh);
+        ctx.drawImage(tmp, 0, 0, tmp.width, tmp.height, sx, sy, sw, sh);
+        ctx.imageSmoothingEnabled = true;
+      } else if(method === 'blur'){
+        const tmp = document.createElement('canvas'); tmp.width = sw; tmp.height = sh;
+        const tctx = tmp.getContext('2d');
+        tctx.filter = 'blur(8px)';
+        tctx.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+        ctx.clearRect(sx, sy, sw, sh);
+        ctx.drawImage(tmp, 0, 0, sw, sh, sx, sy, sw, sh);
+      }
+    }
+  }
+
+  // Apply a global filter to the whole canvas
+  async function applyGlobalFilter(canvas, filter){
+    if(!filter || filter === 'none') return;
+    const w = canvas.width, h = canvas.height;
+    const tmp = document.createElement('canvas'); tmp.width = w; tmp.height = h;
+    const tctx = tmp.getContext('2d');
+    if(filter === 'pixelate'){
+      const pixelSize = Math.max(4, Math.floor(Math.min(w, h) / 60));
+      const sw = Math.max(1, Math.floor(w / pixelSize));
+      const sh = Math.max(1, Math.floor(h / pixelSize));
+      const small = document.createElement('canvas'); small.width = sw; small.height = sh;
+      const sctx = small.getContext('2d');
+      sctx.drawImage(canvas, 0, 0, sw, sh);
+      tctx.imageSmoothingEnabled = false;
+      tctx.clearRect(0,0,w,h);
+      tctx.drawImage(small, 0, 0, sw, sh, 0, 0, w, h);
+    } else if(filter === 'grayscale' || filter === 'blur'){
+      tctx.filter = filter === 'grayscale' ? 'grayscale(100%)' : 'blur(3px)';
+      tctx.drawImage(canvas, 0, 0);
+    } else {
+      return;
+    }
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0,0,w,h);
+    ctx.drawImage(tmp, 0, 0);
   }
 
   // Auto-scrape preference
