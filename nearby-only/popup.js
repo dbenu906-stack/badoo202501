@@ -56,12 +56,29 @@
       setStatus('Fetching images...');
       const files = [];
       let idx = 0;
+      const nameCounts = Object.create(null);
+      const sanitizeFilename = (s) => {
+        if(!s) return '';
+        // remove path separators, control chars; keep letters, numbers, dash, underscore, space
+        let t = String(s).normalize('NFKD').replace(/\p{Diacritic}/gu, '');
+        t = t.replace(/[^\p{L}\p{N} _-]/gu, '');
+        t = t.replace(/\s+/g, '_');
+        if(t.length > 48) t = t.slice(0,48);
+        return t || '';
+      };
       for(const p of arr){
         idx++;
         const url = p.image || '';
-        const safeName = `profile_${idx}`;
+        // prefer profile id for filename, otherwise sanitized name, otherwise fallback to index
+        let base = '';
+        if(p.id) base = `id_${sanitizeFilename(p.id)}`;
+        if(!base && p.name) base = sanitizeFilename(p.name);
+        if(!base) base = `profile_${idx}`;
+        // avoid duplicates
+        const seen = nameCounts[base] || 0; nameCounts[base] = seen + 1;
+        const finalBase = seen ? `${base}_${seen+1}` : base;
         const ext = (url.split('?')[0].split('.').pop() || 'jpg').slice(0,6);
-        const filename = `${safeName}.${ext}`;
+        const filename = `${finalBase}.${ext}`;
         const blob = await fetchAsBlob(url);
           if(blob){
             try{
