@@ -103,6 +103,60 @@
     }catch(e){ console.warn('runScrapeOnce failed', e); }
   }
 
+  // Scroll the nearby list (or window) in steps and scrape incrementally.
+  async function scrollAndScrapeNearby({maxSteps=100, stepDelay=700, stopIfNoNew=6} = {}){
+    try{
+      const nearbyList = document.querySelector('div.people-nearby__content');
+      const container = nearbyList ? (nearbyList.querySelector('ul') || nearbyList) : document.scrollingElement || document.documentElement || window;
+      let lastCount = 0;
+      let noNew = 0;
+      const collected = [];
+
+      const getVisibleProfiles = () => extractProfilesFromDOM();
+
+      for(let step=0; step<maxSteps; step++){
+        // scrape current viewport
+        const found = getVisibleProfiles() || [];
+        // dedupe against collected
+        for(const p of found){
+          const key = (p.image||'')+'||'+(p.name||'');
+          if(!collected.find(x => (x.image||'')+'||'+(x.name||'') === key)) collected.push(p);
+        }
+        // send incremental update to background so data persists mid-scroll
+        if(found.length) sendProfiles(found);
+
+        if(collected.length > lastCount){ lastCount = collected.length; noNew = 0; }
+        else { noNew++; }
+
+        // stop early if no new items seen for several steps
+        if(noNew >= stopIfNoNew) break;
+
+        // attempt to scroll the container: if it's an element, adjust scrollTop else use window scrollBy
+        try{
+          if(container && container.scrollHeight && container.clientHeight){
+            // scroll by one viewport
+            const prev = container.scrollTop;
+            container.scrollTop = Math.min(container.scrollTop + container.clientHeight, container.scrollHeight - container.clientHeight);
+            // if no movement, try to scroll small amount
+            if(container.scrollTop === prev){ container.scrollTop = Math.min(container.scrollTop + 100, container.scrollHeight - container.clientHeight); }
+          } else {
+            // window scroll
+            const prevY = window.scrollY || window.pageYOffset;
+            window.scrollBy({top: Math.max(window.innerHeight * 0.8, 300), left: 0, behavior: 'smooth'});
+            // ensure some time for smooth scroll
+          }
+        }catch(e){ try{ window.scrollBy(0, Math.max(window.innerHeight * 0.8, 300)); }catch(_){} }
+
+        // wait for new content to load and render
+        await new Promise(r => setTimeout(r, stepDelay));
+      }
+
+      // final persist of collected set
+      if(collected.length) sendProfiles(collected);
+      return collected;
+    }catch(err){ console.warn('scrollAndScrapeNearby failed', err); return []; }
+  }
+
   // When the page URL is a people-nearby page, run once on load
   try{
     if(location && /people[-_]nearby|people-nearby|people\/nearby|nearby/.test(location.pathname+location.href)){
