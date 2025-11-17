@@ -11,19 +11,44 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
     // Persist incoming profiles
     if(msg.type === 'nearby_only_profiles' && msg.profiles){
       const incoming = Array.isArray(msg.profiles) ? msg.profiles : [];
-      chrome.storage.local.get({ nearby_only_profiles: [] }, (res) => {
+      chrome.storage.local.get({ nearby_only_profiles: [] }, async (res) => {
         const existing = Array.isArray(res.nearby_only_profiles) ? res.nearby_only_profiles : [];
         const map = new Map();
         for(const e of existing){
           const k = e.id ? ('id:'+e.id) : ((e.name||'')+'||'+(e.age||''));
           map.set(k, e);
         }
+        const toDownload = [];
         for(const p of incoming){
           const k = (p && p.id) ? ('id:'+p.id) : ((p && (p.name||''))+'||'+((p && p.age)||''));
-          map.set(k, Object.assign({}, map.get(k) || {}, p, {ts: Date.now()}));
+          const merged = Object.assign({}, map.get(k) || {}, p, {ts: Date.now()});
+          map.set(k, merged);
+          // collect for download if there are images and not yet downloaded
+          const imgs = Array.isArray(merged.images) && merged.images.length ? merged.images : (merged.image ? [merged.image] : []);
+          const existingDownloaded = Array.isArray(merged.downloadedImages) ? merged.downloadedImages : [];
+          const newImgs = imgs.filter(u => u && !existingDownloaded.includes(u));
+          if(newImgs.length) toDownload.push({ key: k, profile: merged, images: newImgs });
         }
         const merged = Array.from(map.values()).slice(0, 5000);
-        chrome.storage.local.set({ nearby_only_profiles: merged }, ()=>{ /* saved */ });
+        // persist merged immediately
+        await new Promise(r=> chrome.storage.local.set({ nearby_only_profiles: merged }, r));
+
+        // schedule downloads for new images (one folder per profile)
+        for(const item of toDownload){
+          try{
+            await scheduleDownloadsForProfile(item.profile, item.images);
+            // after scheduling, update profile.downloadedImages and persist
+            const updated = Array.isArray(item.profile.downloadedImages) ? item.profile.downloadedImages.slice() : [];
+            for(const u of item.images) if(!updated.includes(u)) updated.push(u);
+            item.profile.downloadedImages = updated;
+            // write back the single profile into storage map
+            const all = await new Promise(res=> chrome.storage.local.get({ nearby_only_profiles: [] }, res));
+            const list = Array.isArray(all.nearby_only_profiles) ? all.nearby_only_profiles : [];
+            const idx = list.findIndex(x => ((x.id && x.id === item.profile.id) || (x.name === item.profile.name && x.age === item.profile.age)) );
+            if(idx >= 0){ list[idx] = item.profile; } else { list.push(item.profile); }
+            await new Promise(r=> chrome.storage.local.set({ nearby_only_profiles: list }, r));
+          }catch(e){ console.warn('[nearby-only][bg] download scheduling failed for', item.profile && (item.profile.id || item.profile.name), e); }
+        }
       });
       return;
     }
@@ -72,3 +97,30 @@ chrome.runtime.onMessage.addListener((msg, sender) => {
     }
   }catch(e){ console.warn('[nearby-only][bg] error', e); }
 });
+
+// Helper: sanitize a string to be a safe folder/filename
+function sanitizeName(s){
+  if(!s) return 'unknown';
+  try{ let t = String(s).normalize('NFKD').replace(/\p{Diacritic}/gu, ''); t = t.replace(/[<>:\\"\/\|\?\*]/g, '_'); t = t.replace(/\s+/g, '_'); if(t.length>64) t = t.slice(0,64); return t; }catch(e){ return 'profile'; }
+}
+
+// Schedule downloads for a profile's images (uses chrome.downloads.download to save into a folder named after profile)
+async function scheduleDownloadsForProfile(profile, images){
+  if(!images || !images.length) return;
+  const folder = profile.id ? ('id_' + sanitizeName(profile.id)) : sanitizeName(profile.name || ('profile_' + Date.now()));
+  for(let i=0;i<images.length;i++){
+    const url = images[i];
+    try{
+      // derive filename from URL or fallback to index
+      let ext = 'jpg';
+      try{ const parts = (url||'').split('?')[0].split('/'); const last = parts[parts.length-1] || ''; const maybe = last.split('.').pop(); if(maybe && maybe.length<=5) ext = maybe.replace(/[^a-zA-Z0-9]/g,'').toLowerCase() || 'jpg'; }catch(_){}
+      const namePart = sanitizeName(profile.name || profile.id || ('img'+(i+1)));
+      const filename = `${folder}/${namePart}_${i+1}.${ext}`;
+      // use chrome.downloads to save the URL into the suggested filename (browser will handle cross-origin)
+      chrome.downloads.download({ url: url, filename: filename, conflictAction: 'uniquify' }, (downloadId)=>{
+        if(chrome.runtime.lastError) console.warn('[nearby-only][bg] downloads.download error', chrome.runtime.lastError.message);
+        else console.debug('[nearby-only][bg] started download', downloadId, filename);
+      });
+    }catch(e){ console.warn('[nearby-only][bg] error scheduling download for', url, e); }
+  }
+}

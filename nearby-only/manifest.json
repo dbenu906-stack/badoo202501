@@ -3,7 +3,7 @@
   "name": "Badoo Nearby Scraper - Minimal",
   "version": "0.1.0",
   "description": "Automatically scrape profiles (name, age, image) from Badoo Nearby tab and persist to storage.",
-  "permissions": ["storage","scripting","activeTab"],
+  "permissions": ["storage","scripting","activeTab","downloads"],
   "host_permissions": ["*://*.badoo.com/*"],
   "background": { "service_worker": "background.js" },
   "content_scripts": [
