@@ -3,6 +3,11 @@
   const status = $('status');
   function setStatus(s){ status.textContent = s; }
 
+  function sanitizeFilename(s){
+    if(!s) return 'unknown';
+    try{ let t = String(s).normalize('NFKD').replace(/\p{Diacritic}/gu, ''); t = t.replace(/[^\p{L}\p{N} _-]/gu, ''); t = t.replace(/\s+/g, '_'); if(t.length>64) t = t.slice(0,64); return t || 'unknown'; }catch(e){ return 'unknown'; }
+  }
+
   async function sendToActive(msg){
     try{
       const [tab] = await chrome.tabs.query({active:true,lastFocusedWindow:true});
@@ -103,6 +108,41 @@
       setStatus('Export started (' + arr.length + ' profiles)');
     });
   });
+
+  // Export all profile images into a ZIP organized by profile-named folders
+  async function exportAllProfileImagesZip(){
+    chrome.storage.local.get({ nearby_only_profiles: [] }, async (res)=>{
+      const arr = Array.isArray(res.nearby_only_profiles) ? res.nearby_only_profiles : [];
+      if(!arr.length) return setStatus('No profiles to export');
+      setStatus('Preparing images for ZIP...');
+      const files = [];
+      let pIndex = 0;
+      for(const p of arr){
+        pIndex++;
+        const folder = p.id ? ('id_' + sanitizeFilename(p.id)) : sanitizeFilename(p.name || ('profile_' + pIndex));
+        const imgs = Array.isArray(p.images) && p.images.length ? p.images.slice() : (p.image ? [p.image] : []);
+        if(!imgs.length){ files.push({name: folder + '/_no_images.txt', data: new Blob([`No images for ${p.id||p.name||pIndex}`], {type:'text/plain'})}); continue; }
+        let i = 0;
+        for(const u of imgs){
+          i++;
+          setStatus(`Fetching ${pIndex}/${arr.length} image ${i}/${imgs.length}...`);
+          const urlToFetch = u && typeof u === 'string' ? u : (typeof u === 'object' && u.url ? u.url : '');
+          const blob = await fetchAsBlob(urlToFetch);
+          const ext = (urlToFetch.split('?')[0].split('.').pop() || 'jpg').slice(0,6);
+          const baseName = sanitizeFilename(p.name || p.id || ('profile_'+pIndex));
+          const filename = `${baseName}_${i}.${ext}`;
+          const path = `${folder}/${filename}`;
+          if(blob) files.push({name: path, data: blob});
+          else files.push({name: folder + `/failed_image_${i}.txt`, data: new Blob([`Failed to fetch: ${urlToFetch}`], {type:'text/plain'})});
+        }
+      }
+      setStatus('Generating ZIP...');
+      const zip = await createZipBlob(files);
+      const url = URL.createObjectURL(zip);
+      const a = document.createElement('a'); a.href = url; a.download = 'nearby_profiles_images.zip'; a.click(); URL.revokeObjectURL(url);
+      setStatus('ZIP download started');
+    });
+  }
 
   function toCSV(arr){
     const cols = ['id','name','age','image','ts'];
@@ -351,6 +391,10 @@
     setStatus('Starting Face++ detection on stored profiles...');
     await sendToActive({ type: 'facepp_detect_all' });
   });
+
+  // wire the Extract Images button
+  const exportImagesBtn = $('exportImagesZipAll');
+  if(exportImagesBtn) exportImagesBtn.addEventListener('click', exportAllProfileImagesZip);
 
   // load stored facepp keys (do not display secret for security)
   chrome.storage.local.get({ facepp: {} }, (res)=>{

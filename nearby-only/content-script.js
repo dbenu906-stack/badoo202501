@@ -270,17 +270,59 @@
     return null;
   }
 
-  function scrapeOpenProfile(){
+  async function loadAllProfileGallery(root, {maxSteps=12, stepDelay=300} = {}){
+    try{
+      // try common gallery/container selectors
+      const selectors = ['.csms-profile-media', '.profile-photos', '.csms-gallery', '.gallery', '.multimedia', '.multimedia-list', '.photo-gallery', '[data-qa="media"]'];
+      let container = null;
+      for(const s of selectors){ const el = root.querySelector(s); if(el){ container = el; break; } }
+      if(!container) container = root;
+      const seen = new Set();
+      let noNew = 0;
+      for(let step=0; step<maxSteps; step++){
+        // collect images
+        const imgs = Array.from(container.querySelectorAll('img')).map(i=>i.src||i.getAttribute('src')||'').filter(Boolean);
+        let added = 0;
+        for(const u of imgs){ if(u && !seen.has(u)){ seen.add(u); added++; } }
+        if(added === 0) noNew++; else noNew = 0;
+        if(noNew >= 3) break;
+        // try to advance gallery: click next buttons or scroll container
+        const nextBtn = container.querySelector('button[aria-label*="next" i], .next, .gallery-next, .slick-next, button[data-action*="next"]');
+        if(nextBtn){ try{ nextBtn.click(); }catch(e){} }
+        else {
+          try{
+            if(typeof container.scrollLeft === 'number' && container.scrollWidth > container.clientWidth){ container.scrollLeft += Math.max(container.clientWidth*0.7, 200); }
+            else if(typeof container.scrollTop === 'number' && container.scrollHeight > container.clientHeight){ container.scrollTop += Math.max(container.clientHeight*0.7, 200); }
+            else { window.scrollBy(0, 200); }
+          }catch(e){ try{ window.scrollBy(0, 200); }catch(e){} }
+        }
+        await new Promise(r => setTimeout(r, stepDelay));
+      }
+      return Array.from(seen);
+    }catch(e){ return []; }
+  }
+
+  async function scrapeOpenProfile(){
     try{
       const root = document.querySelector('[data-qa="profile-page"]') || document.querySelector('.csms-profile-page') || document.querySelector('.profile-page') || document.querySelector('.user-profile') || document.body;
       const nameEl = root.querySelector('.csms-profile-info__name-inner') || root.querySelector('[data-qa="profile-info__name"]') || root.querySelector('h1') || null;
       const ageEl = root.querySelector('[data-qa="profile-info__age"]') || root.querySelector('.profile-age') || null;
-      const imgs = Array.from(root.querySelectorAll('img')).map(i=> i.src || i.getAttribute('src') || '').filter(Boolean);
+      // Location: look for the user-section/location block the user provided
+      const locSection = root.querySelector('[data-qa="location"]') || root.querySelector('.user-section[data-qa="location"]') || root.querySelector('[data-qa-user-section-last]');
+      let locationText = '';
+      try{ if(locSection){ const textEl = locSection.querySelector('.csms-view-profile-block__header-text') || locSection.querySelector('.csms-header-2') || locSection; locationText = textEl ? ((textEl.innerText || textEl.textContent || '').trim()) : ''; } }catch(e){ locationText = ''; }
+      // attempt to load/scroll the profile gallery to reveal more images
+      let imgs = [];
+      try{ imgs = await loadAllProfileGallery(root, {maxSteps:12, stepDelay:260}); }catch(e){ imgs = []; }
+      // fallback: gather any images in the profile view
+      if(!imgs || !imgs.length){ imgs = Array.from(root.querySelectorAll('img')).map(i=> i.src || i.getAttribute('src') || '').filter(Boolean); }
       const idBtn = root.querySelector('button[data-qa-user-id]') || document.querySelector('button[data-qa-user-id]');
       const id = idBtn ? (idBtn.getAttribute('data-qa-user-id')||'') : '';
       const name = nameEl ? (nameEl.innerText || nameEl.textContent || '').trim() : '';
       const age = ageEl ? (ageEl.innerText || ageEl.textContent || '').trim().replace(/^,\s*/,'') : '';
-      return { id, name, age, images: imgs.slice(0,8) };
+      // dedupe and normalize images
+      const uniq = Array.from(new Set(imgs)).map(u => (u && u.startsWith('//')) ? window.location.protocol + u : u).filter(Boolean);
+      return { id, name, age, images: uniq.slice(0,200), location: locationText };
     }catch(e){ LOG('scrapeOpenProfile error', e); return null; }
   }
 
@@ -318,7 +360,7 @@
           if(data){
             LOG('scraped', data.name || data.id, data.images && data.images.length);
             results.push(data);
-            try{ chrome.runtime.sendMessage({type:'nearby_only_profiles', profiles: [ { id: data.id||'', name: data.name||'', age: data.age||'', image: (data.images && data.images[0])||'' } ]}); }catch(e){}
+            try{ chrome.runtime.sendMessage({type:'nearby_only_profiles', profiles: [ { id: data.id||'', name: data.name||'', age: data.age||'', image: (data.images && data.images[0])||'', images: data.images||[], location: data.location||'' } ]}); }catch(e){}
           }
           closeProfileView();
         } else {
